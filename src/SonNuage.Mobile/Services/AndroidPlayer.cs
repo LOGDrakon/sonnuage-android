@@ -23,6 +23,7 @@ public sealed class AndroidPlayer(QueueStore queueStore, PlaybackSettings settin
     private IReadOnlyList<TrackDto> _queue = [];
     private readonly Dictionary<Guid, TrackDto> _updated = [];
     private Ticker? _ticker;
+    private VolumeObserver? _volumeObserver;
 
     public PlayerState State => _state;
 
@@ -124,7 +125,27 @@ public sealed class AndroidPlayer(QueueStore queueStore, PlaybackSettings settin
         _ => PlayerConst.RepeatOff,
     });
 
-    public Task SetVolumeAsync(double volume) => OnMain(c => c.Volume = (float)Math.Clamp(volume, 0, 1));
+    /// <summary>
+    /// Volume média du téléphone (celui des touches de volume), pas le gain du lecteur : réglé depuis une montre ou un
+    /// autre appareil, 100 % doit être le maximum du téléphone, pas son réglage du moment.
+    /// </summary>
+    public Task SetVolumeAsync(double volume) => OnMain(_ =>
+    {
+        var audio = Audio;
+        var max = audio.GetStreamMaxVolume(Android.Media.Stream.Music);
+        audio.SetStreamVolume(Android.Media.Stream.Music, (int)Math.Round(Math.Clamp(volume, 0, 1) * max), 0);
+        Refresh(timelineChanged: false);
+    });
+
+    private static Android.Media.AudioManager Audio =>
+        (Android.Media.AudioManager)Android.App.Application.Context.GetSystemService(Context.AudioService)!;
+
+    private static double SystemVolume()
+    {
+        var audio = Audio;
+        var max = audio.GetStreamMaxVolume(Android.Media.Stream.Music);
+        return max > 0 ? (double)audio.GetStreamVolume(Android.Media.Stream.Music) / max : 1;
+    }
 
     public Task EnqueueAsync(IReadOnlyList<TrackDto> tracks, bool playNext)
     {
@@ -178,7 +199,15 @@ public sealed class AndroidPlayer(QueueStore queueStore, PlaybackSettings settin
         var result = await new MediaController.Builder(context, token).BuildAsync()!.AsTask();
         var controller = result.JavaCast<MediaController>()!;
         controller.AddListener(new Listener(this));
+        // Ancien réglage par le gain du lecteur (avant le volume système) : il ne doit plus atténuer le son.
+        if (controller.Volume < 1) controller.Volume = 1;
         _controller = controller;
+        // Touches de volume, panneau système… : l'état (et ce qu'affichent les autres appareils) suit.
+        if (_volumeObserver is null)
+        {
+            _volumeObserver = new VolumeObserver(this);
+            context.ContentResolver!.RegisterContentObserver(Android.Provider.Settings.System.ContentUri!, true, _volumeObserver);
+        }
         _ticker ??= new Ticker(TimeSpan.FromMilliseconds(500), () => Refresh(timelineChanged: false));
         Refresh(timelineChanged: true);
         return controller;
@@ -212,7 +241,7 @@ public sealed class AndroidPlayer(QueueStore queueStore, PlaybackSettings settin
                 PlayerConst.RepeatOne => RepeatMode.One,
                 _ => RepeatMode.Off,
             },
-            c.Volume,
+            SystemVolume(),
             c.PlayerError?.Message);
 
         if (_ticker is not null)
@@ -251,6 +280,19 @@ public sealed class AndroidPlayer(QueueStore queueStore, PlaybackSettings settin
             if (!IsRunning) return;
             tick();
             if (IsRunning) _handler.PostDelayed(this, (long)interval.TotalMilliseconds);
+        }
+    }
+
+    private sealed class VolumeObserver(AndroidPlayer owner) : Android.Database.ContentObserver(new Android.OS.Handler(Android.OS.Looper.MainLooper!))
+    {
+        private double _last = -1;
+
+        public override void OnChange(bool selfChange)
+        {
+            var volume = SystemVolume();
+            if (volume == _last) return;
+            _last = volume;
+            owner.Refresh(timelineChanged: false);
         }
     }
 
