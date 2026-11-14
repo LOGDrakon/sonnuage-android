@@ -31,7 +31,13 @@ public static class CrashLog
             Write("TaskScheduler", e.Exception);
             e.SetObserved();
         };
-        AndroidEnvironment.UnhandledExceptionRaiser += (_, e) => Write("Android", e.Exception);
+        AndroidEnvironment.UnhandledExceptionRaiser += (_, e) =>
+        {
+            // Un Future (TaskFuture) annoncé en échec ou annulé lève ces exceptions vers Java, qui les attend et
+            // les gère (Media3) : ce n'est pas un plantage.
+            if (e.Exception is Java.Util.Concurrent.ExecutionException or Java.Util.Concurrent.CancellationException) return;
+            Write("Android", e.Exception);
+        };
         Breadcrumbs.Add("démarrage");
     }
 

@@ -155,9 +155,10 @@ public sealed class GlyphCloud : Java.Lang.Object, GlyphMatrixManager.ICallback
             catch (OperationCanceledException)
             {
             }
-            catch (GlyphException)
+            catch (Exception ex) when (ex is GlyphException or Java.Lang.IllegalStateException)
             {
-                // Affichage refusé (système trop ancien, service perdu) : l'animation s'arrête, la lecture continue.
+                // Affichage refusé (système trop ancien, service perdu, ou « not registered » quand le système a
+                // repris la matrice, pour un Glyph Toy par exemple) : l'animation s'arrête, la lecture continue.
             }
         });
     }
