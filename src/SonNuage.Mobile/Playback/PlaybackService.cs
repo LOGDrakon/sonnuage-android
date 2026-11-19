@@ -65,12 +65,14 @@ public sealed class PlaybackService : MediaLibraryService
             .SetCache(cache)!
             .SetUpstreamDataSourceFactory(http)!
             .SetFlags(CacheDataSource.FlagIgnoreCacheOnError)!;
-        var resolver = new StreamResolver(api, settings, accounts, cache);
+        var resolver = new StreamResolver(api, settings, accounts, cache, services.GetRequiredService<YoutubeDirect>());
         var extractors = new DefaultExtractorsFactory()
             .SetConstantBitrateSeekingEnabled(true)!
             .SetConstantBitrateSeekingAlwaysEnabled(true)!;
         var loadControl = new DefaultLoadControl.Builder()
-            .SetBufferDurationsMs(30_000, 300_000, 1_500, 3_000)!
+            // Lecture dès 250 ms en mémoire (au lieu de 1,5 s) : le démarrage gagne ~1 s sur un flux lent à venir
+            // (transcodage, YouTube), et le tampon se remplit ensuite bien plus vite que la lecture.
+            .SetBufferDurationsMs(30_000, 300_000, 250, 2_000)!
             .Build();
         var audio = new AudioAttributes.Builder()
             .SetUsage(C.UsageMedia)!
@@ -297,6 +299,8 @@ public sealed class PlaybackService : MediaLibraryService
         {
             // Pas de clé : la file est en cours de vidage pour un changement de compte, l'écoute n'est pas à imputer.
             if (queueKey() is null || TrackItems.ToTrack(item) is not { } track) return;
+            // Titre joué directement depuis YouTube (Jam) : inconnu du serveur, pas d'historique.
+            if (YoutubeTracks.IsYoutube(track)) return;
             if (ListenRule.Played(seconds, track.DurationSeconds, completed) is not { } played) return;
             _ = Task.Run(async () =>
             {
