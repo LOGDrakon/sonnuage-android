@@ -209,7 +209,10 @@ public sealed class AndroidPlayer(QueueStore queueStore, PlaybackSettings settin
     {
         var context = Android.App.Application.Context;
         var token = new SessionToken(context, new ComponentName(context, Java.Lang.Class.FromType(typeof(PlaybackService))));
-        var result = await new MediaController.Builder(context, token).BuildAsync()!.AsTask();
+        // Se signale à la session : ses commandes ne sont pas routées vers un Jam (voir JamRoutingPlayer).
+        var hints = new Android.OS.Bundle();
+        hints.PutBoolean(Playback.JamRoutingPlayer.AppControllerHint, true);
+        var result = await new MediaController.Builder(context, token).SetConnectionHints(hints)!.BuildAsync()!.AsTask();
         var controller = result.JavaCast<MediaController>()!;
         controller.AddListener(new Listener(this));
         // Ancien réglage par le gain du lecteur (avant le volume système) : il ne doit plus atténuer le son.

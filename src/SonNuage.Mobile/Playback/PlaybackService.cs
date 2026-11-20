@@ -35,6 +35,8 @@ public sealed class PlaybackService : MediaLibraryService
     private static SimpleCache? _cache;
 
     private MediaLibrarySession? _session;
+    /// <summary>Le lecteur direct (la session, elle, voit <see cref="JamRoutingPlayer"/>).</summary>
+    private ShufflingPlayer? _player;
     private Prefetcher? _prefetcher;
     private AccountStore? _accounts;
     private QueueStore? _queue;
@@ -88,7 +90,7 @@ public sealed class PlaybackService : MediaLibraryService
             .SetWakeMode(C.WakeModeNetwork)!
             .Build()!;
         exo.ShuffleOrder = new ShuffleOrderUnshuffledShuffleOrder(0);
-        var player = new ShufflingPlayer(exo);
+        var player = _player = new ShufflingPlayer(exo);
         // Second lecteur du fondu enchaîné (voir Crossfader) : mêmes sources et même cache, sans focus audio ni
         // gestion du casque débranché, que le principal porte pour les deux.
         var tail = new ExoPlayerBuilder(this)
@@ -101,7 +103,11 @@ public sealed class PlaybackService : MediaLibraryService
         _glyph = Glyph.GlyphCloud.ForApp(this);
 
         var activity = PendingIntent.GetActivity(this, 0, new Intent(this, typeof(MainActivity)), PendingIntentFlags.Immutable | PendingIntentFlags.UpdateCurrent);
-        _session = new MediaLibrarySession.Builder(this, player, new LibraryCallback(browser, queue))
+        // La session voit le lecteur à travers JamRoutingPlayer : dans un Jam, notification, casque et Android Auto
+        // pilotent l'hôte. Le reste du service garde le lecteur direct.
+        var linked = services.GetRequiredService<SonNuage.UI.Services.IPlayer>() as LinkedPlayer;
+        var routing = new JamRoutingPlayer(player, () => linked?.Route);
+        _session = new MediaLibrarySession.Builder(this, routing, new LibraryCallback(browser, queue, routing))
             .SetSessionActivity(activity!)!
             .Build();
         // Après la session : à chaque changement de piste, elle publie le nouveau titre (notification, Android Auto)
@@ -109,7 +115,7 @@ public sealed class PlaybackService : MediaLibraryService
         player.AddListener(new PlayerEvents(player, _prefetcher, crossfader, queue, () => _queueKey, api, settings, browser, _glyph));
         accounts.ActiveChanged += OnAccountChanged;
         // Les autres appareils du compte voient ce que joue le téléphone et le pilotent, même sans interface ouverte.
-        if (services.GetRequiredService<SonNuage.UI.Services.IPlayer>() is LinkedPlayer linked)
+        if (linked is not null)
         {
             _ = services.GetRequiredService<Services.AndroidPlayer>().AttachAsync();
             _ = linked.ConnectAsync();
@@ -122,7 +128,7 @@ public sealed class PlaybackService : MediaLibraryService
     /// </summary>
     private void OnAccountChanged() => MainThread.BeginInvokeOnMainThread(async () =>
     {
-        if (_session?.Player is not { } player || _queue is not { } queue) return;
+        if (_session is null || _player is not { } player || _queue is not { } queue) return;
         queue.Save(player, _queueKey);
         _queueKey = null;
         _prefetcher?.Cancel();
@@ -136,7 +142,7 @@ public sealed class PlaybackService : MediaLibraryService
             _session.NotifyChildrenChanged(id, int.MaxValue, null);
         }
         var saved = await queue.LoadAsync();
-        if (saved is null || _session?.Player is not { } current || current.MediaItemCount > 0) return;
+        if (saved is null || _session is null || _player is not { } current || current.MediaItemCount > 0) return;
         saved.LoadInto(current);
     });
 
@@ -317,8 +323,18 @@ public sealed class PlaybackService : MediaLibraryService
     }
 
     /// <summary>Arborescence Android Auto, recherche, résolution des éléments demandés et reprise de lecture.</summary>
-    private sealed class LibraryCallback(LibraryBrowser browser, QueueStore queue) : Java.Lang.Object, MediaLibrarySession.ICallback
+    private sealed class LibraryCallback(LibraryBrowser browser, QueueStore queue, JamRoutingPlayer routing) : Java.Lang.Object, MediaLibrarySession.ICallback
     {
+        /// <summary>
+        /// Appelé juste avant chaque commande, sur le thread du lecteur, qui l'exécute aussitôt après : le lecteur
+        /// sait ainsi si elle vient de l'interface ou d'ailleurs (notification, casque, Android Auto).
+        /// </summary>
+        public int OnPlayerCommandRequest(MediaSession? session, MediaSession.ControllerInfo? controller, int playerCommand)
+        {
+            routing.FromOutside = controller?.ConnectionHints?.GetBoolean(JamRoutingPlayer.AppControllerHint) != true;
+            return SessionResult.ResultSuccess;
+        }
+
         private const int ErrorNotSupported = -6;
         private readonly object _searchLock = new();
         // Dernière recherche seulement : Media3 demande ses pages juste après l'avoir annoncée. Un dictionnaire gardait
