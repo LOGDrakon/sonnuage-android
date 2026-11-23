@@ -70,6 +70,9 @@ public sealed class StreamResolver(ApiClient api, PlaybackSettings settings, Acc
             throw new Java.IO.IOException(ex.Message);
         }
         if (audio is null) throw new Java.IO.IOException($"YouTube : flux indisponible ({video})");
+        // La clé ne dit pas quel format est en cache (elle doit rester la même pour relire hors ligne un titre complet) :
+        // un début de piste d'un autre format, d'une autre taille, ne doit pas se mélanger au nouveau.
+        if (cachedLength > 0 && audio.ContentLength > 0 && cachedLength != audio.ContentLength) cache.RemoveResource(key);
         var builder = dataSpec.BuildUpon()!.SetUri(Android.Net.Uri.Parse(audio.Url))!.SetKey(key)!;
         // Range explicite même pour une lecture depuis le début (ExoPlayer n'en met que pour un décalage).
         if (dataSpec.Position == 0 && dataSpec.Length == C.LengthUnset)
