@@ -42,6 +42,8 @@ public sealed class PlaybackService : MediaLibraryService
     private QueueStore? _queue;
     private Crossfader? _crossfader;
     private Glyph.GlyphCloud? _glyph;
+    private LinkedPlayer? _linked;
+    private JamRoutingPlayer? _routing;
 
     /// <summary>Clé de sauvegarde de la file actuellement chargée (celle du compte à qui elle appartient).</summary>
     private string? _queueKey;
@@ -105,12 +107,14 @@ public sealed class PlaybackService : MediaLibraryService
         var activity = PendingIntent.GetActivity(this, 0, new Intent(this, typeof(MainActivity)), PendingIntentFlags.Immutable | PendingIntentFlags.UpdateCurrent);
         // La session voit le lecteur à travers JamRoutingPlayer : dans un Jam, notification, casque et Android Auto
         // pilotent l'hôte. Le reste du service garde le lecteur direct.
-        var linked = services.GetRequiredService<SonNuage.UI.Services.IPlayer>() as LinkedPlayer;
-        var routing = new JamRoutingPlayer(player, () => linked?.Route);
+        var linked = _linked = services.GetRequiredService<SonNuage.UI.Services.IPlayer>() as LinkedPlayer;
+        var routing = _routing = JamRoutingPlayer.Current = new JamRoutingPlayer(player, () => linked?.Route);
         _session = new MediaLibrarySession.Builder(this, routing, new LibraryCallback(browser, queue))
             .SetSessionActivity(activity!)!
             .Build();
         routing.Session = _session;
+        // LinkedPlayer relaie les changements du Jam (IPlayerRoute.ShownChanged) : la notification suit l'hôte.
+        if (linked is not null) linked.StateChanged += routing.Refresh;
         // Après la session : à chaque changement de piste, elle publie le nouveau titre (notification, Android Auto)
         // avant nos traitements.
         player.AddListener(new PlayerEvents(player, _prefetcher, crossfader, queue, () => _queueKey, api, settings, browser, _glyph));
@@ -155,6 +159,8 @@ public sealed class PlaybackService : MediaLibraryService
     public override void OnDestroy()
     {
         if (_accounts is not null) _accounts.ActiveChanged -= OnAccountChanged;
+        if (_linked is not null && _routing is not null) _linked.StateChanged -= _routing.Refresh;
+        if (JamRoutingPlayer.Current == _routing) JamRoutingPlayer.Current = null;
         _prefetcher?.Cancel();
         _crossfader?.Release();
         _crossfader = null;

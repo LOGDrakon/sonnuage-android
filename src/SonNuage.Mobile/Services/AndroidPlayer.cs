@@ -63,7 +63,7 @@ public sealed class AndroidPlayer(QueueStore queueStore, PlaybackSettings settin
     /// <summary>Un autre appareil du compte joue : celui-ci se met en pause, sa file reste.</summary>
     public Task ReleaseAsync() => OnMain(c =>
     {
-        if (c.IsPlaying) c.Pause();
+        if (Local(c).IsPlaying) c.Pause();
     });
 
     public Task PlayAsync(IReadOnlyList<TrackDto> tracks, int startIndex = 0, bool? shuffle = null) => OnMain(c =>
@@ -103,15 +103,24 @@ public sealed class AndroidPlayer(QueueStore queueStore, PlaybackSettings settin
 
     public Task TogglePlayAsync() => OnMain(c =>
     {
-        if (c.IsPlaying)
+        var local = Local(c);
+        if (local.IsPlaying)
         {
             c.Pause();
             return;
         }
-        if (c.PlaybackState == PlayerConst.StateIdle) c.Prepare();
-        if (c.PlaybackState == PlayerConst.StateEnded) c.SeekTo(0, 0);
+        if (local.State == PlayerConst.StateIdle) c.Prepare();
+        if (local.State == PlayerConst.StateEnded) c.SeekTo(0, 0);
         c.Play();
     });
+
+    /// <summary>
+    /// Le lecteur local tel qu'il est. En Jam « hôte seulement », la session montre la lecture de l'hôte (casque,
+    /// notification : voir <see cref="JamRoutingPlayer"/>) ; l'interface et les autres appareils du compte doivent, eux,
+    /// voir le lecteur local muet : sinon le téléphone se déclarerait lecteur actif dès que l'hôte joue.
+    /// </summary>
+    private static (bool PlayWhenReady, bool IsPlaying, int State) Local(MediaController c) =>
+        JamRoutingPlayer.Current is { ShowsHost: true } routing ? routing.Local : (c.PlayWhenReady, c.IsPlaying, c.PlaybackState);
 
     public Task NextAsync() => OnMain(c => c.SeekToNextMediaItem());
 
@@ -243,11 +252,12 @@ public sealed class AndroidPlayer(QueueStore queueStore, PlaybackSettings settin
         }
         var index = c.CurrentMediaItemIndex;
         var current = index >= 0 && index < _queue.Count ? _queue[index] : null;
+        var local = Local(c);
         _state = new PlayerState(
             _queue,
             current is null ? -1 : index,
-            c.IsPlaying,
-            c.PlayWhenReady && c.PlaybackState == PlayerConst.StateBuffering,
+            local.IsPlaying,
+            local.PlayWhenReady && local.State == PlayerConst.StateBuffering,
             Math.Max(0, c.CurrentPosition) / 1000.0,
             c.Duration > 0 ? c.Duration / 1000.0 : current?.DurationSeconds ?? 0,
             c.ShuffleModeEnabled,
@@ -262,8 +272,8 @@ public sealed class AndroidPlayer(QueueStore queueStore, PlaybackSettings settin
 
         if (_ticker is not null)
         {
-            if (c.IsPlaying && !_ticker.IsRunning) _ticker.Start();
-            else if (!c.IsPlaying && _ticker.IsRunning) _ticker.Stop();
+            if (local.IsPlaying && !_ticker.IsRunning) _ticker.Start();
+            else if (!local.IsPlaying && _ticker.IsRunning) _ticker.Stop();
         }
         StateChanged?.Invoke();
     }

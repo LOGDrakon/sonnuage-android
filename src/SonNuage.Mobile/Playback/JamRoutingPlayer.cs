@@ -16,6 +16,11 @@ namespace SonNuage.Mobile.Playback;
 /// donc servir à la mauvaise commande. Le reste du service (fondu enchaîné, pré-chargement…) utilise le lecteur
 /// enveloppé directement.
 /// </para>
+/// <para>
+/// En « hôte seulement », la session montre aussi la lecture ou la pause de l'hôte (<see cref="IPlayerRoute.Shown"/>) :
+/// le casque et la notification choisissent entre lecture et pause d'après elle, et le lecteur local, lui, ne joue
+/// jamais. L'interface garde l'état réel du lecteur local (<see cref="Local"/>).
+/// </para>
 /// </summary>
 public sealed class JamRoutingPlayer(Media3IPlayer player, Func<IPlayerRoute?> route) : ForwardingPlayer(player)
 {
@@ -34,6 +39,107 @@ public sealed class JamRoutingPlayer(Media3IPlayer player, Func<IPlayerRoute?> r
     /// <summary>La route du Jam si la commande en cours doit y aller, null pour le lecteur local.</summary>
     private IPlayerRoute? Target => route() is { } r && HostControl.ToHost(Caller, r.Routes) ? r : null;
 
+    // ---- Hôte seulement : la session montre la lecture de l'hôte ----
+
+    /// <summary>
+    /// Le lecteur de la session du service en cours (posé à sa création, retiré à sa destruction) : l'interface, dans
+    /// le même processus et sur le même thread, y lit l'état réel du lecteur local.
+    /// </summary>
+    public static JamRoutingPlayer? Current { get; set; }
+
+    /// <summary>Ce que joue l'hôte quand le son reste chez lui ; null quand le lecteur local joue lui-même.</summary>
+    private PlayerState? Host => route() is { Routes: true, Shown: { } shown } ? shown : null;
+
+    /// <summary>La session montre-t-elle l'hôte plutôt que le lecteur local ?</summary>
+    public bool ShowsHost => Host is not null;
+
+    public override bool IsPlaying => Host is { } host ? host.IsPlaying : base.IsPlaying;
+
+    // Prêt dès que l'hôte a un titre : sinon une lecture demandée sur un lecteur local vide relancerait la reprise de
+    // la file sauvegardée, ici.
+    public override int PlaybackState => Host is { Current: not null } ? PlayerConst.StateReady : base.PlaybackState;
+
+    /// <summary>Le lecteur local tel qu'il est, quoi que montre la session.</summary>
+    public (bool PlayWhenReady, bool IsPlaying, int State) Local => (base.PlayWhenReady, base.IsPlaying, base.PlaybackState);
+
+    private (bool PlayWhenReady, bool IsPlaying, int State) Face => (PlayWhenReady, IsPlaying, PlaybackState);
+
+    // ForwardingPlayer ne relaie que les événements du lecteur enveloppé : quand l'hôte change, c'est à nous de prévenir
+    // les écouteurs de la session (notification, contrôleurs), avec ce qu'ils ont vu en dernier pour seule référence.
+    private readonly List<IPlayerListener> _listeners = [];
+    private (bool PlayWhenReady, bool IsPlaying, int State) _seen;
+    private readonly Android.OS.Handler _handler = new(player.ApplicationLooper!);
+    private Inner? _inner;
+
+    public override void AddListener(IPlayerListener? listener)
+    {
+        base.AddListener(listener);
+        if (listener is null) return;
+        if (_listeners.Count == 0) _seen = Face;
+        _listeners.Add(listener);
+        if (_inner is null)
+        {
+            _inner = new Inner(this);
+            WrappedPlayer!.AddListener(_inner);
+        }
+    }
+
+    public override void RemoveListener(IPlayerListener? listener)
+    {
+        base.RemoveListener(listener);
+        if (listener is not null) _listeners.Remove(listener);
+    }
+
+    /// <summary>L'état du Jam a pu changer (n'importe quel thread) : la session le reverra sur le thread du lecteur.</summary>
+    public void Refresh() => _handler.Post(Publish);
+
+    private void Publish()
+    {
+        var face = Face;
+        if (face == _seen || _listeners.Count == 0) return;
+        var seen = _seen;
+        _seen = face;
+        var flags = new FlagSet.Builder();
+        foreach (var listener in _listeners.ToList())
+        {
+            if (face.PlayWhenReady != seen.PlayWhenReady) listener.OnPlayWhenReadyChanged(face.PlayWhenReady, InterfaceConsts.PlayWhenReadyChangeReasonRemote);
+            if (face.State != seen.State) listener.OnPlaybackStateChanged(face.State);
+            if (face.IsPlaying != seen.IsPlaying) listener.OnIsPlayingChanged(face.IsPlaying);
+        }
+        if (face.PlayWhenReady != seen.PlayWhenReady) flags.Add(InterfaceConsts.EventPlayWhenReadyChanged);
+        if (face.State != seen.State) flags.Add(InterfaceConsts.EventPlaybackStateChanged);
+        if (face.IsPlaying != seen.IsPlaying) flags.Add(InterfaceConsts.EventIsPlayingChanged);
+        var events = new PlayerEvents(flags.Build());
+        foreach (var listener in _listeners.ToList()) listener.OnEvents(this, events);
+    }
+
+    /// <summary>
+    /// Les événements du lecteur local arrivent aux écouteurs avec ses propres valeurs : notées comme vues, puis
+    /// corrigées juste après si la session montre l'hôte.
+    /// </summary>
+    private sealed class Inner(JamRoutingPlayer owner) : Java.Lang.Object, IPlayerListener
+    {
+        public void OnPlayWhenReadyChanged(bool playWhenReady, int reason)
+        {
+            owner._seen.PlayWhenReady = playWhenReady;
+            owner.Refresh();
+        }
+
+        public void OnIsPlayingChanged(bool isPlaying)
+        {
+            owner._seen.IsPlaying = isPlaying;
+            owner.Refresh();
+        }
+
+        public void OnPlaybackStateChanged(int playbackState)
+        {
+            owner._seen.State = playbackState;
+            owner.Refresh();
+        }
+    }
+
+    // ---- Commandes ----
+
     // Lecture/pause disent ce qu'elles veulent : l'état du lecteur local (muet en « hôte seulement », en retard sur
     // l'hôte en mode invité) ne doit pas décider s'il faut basculer.
     public override void Play()
@@ -50,7 +156,7 @@ public sealed class JamRoutingPlayer(Media3IPlayer player, Func<IPlayerRoute?> r
 
     public override bool PlayWhenReady
     {
-        get => base.PlayWhenReady;
+        get => Host is { } host ? host.IsPlaying : base.PlayWhenReady;
         set
         {
             if (Target is { } r) _ = r.SetPlayingAsync(value);
