@@ -1,4 +1,5 @@
 using AndroidX.Media3.Common;
+using AndroidX.Media3.Session;
 using SonNuage.UI.Services;
 
 namespace SonNuage.Mobile.Playback;
@@ -9,9 +10,11 @@ namespace SonNuage.Mobile.Playback;
 /// (voir <see cref="LinkedPlayer"/>) : sur le lecteur local, la synchro l'annulerait aussitôt.
 /// <para>
 /// L'interface passe aussi par la session (<see cref="Services.AndroidPlayer"/>) : ses commandes, déjà routées par
-/// <see cref="LinkedPlayer"/> ou envoyées par la synchro elle-même, restent locales. La session dit qui commande via
-/// <see cref="FromOutside"/>, posé juste avant chaque commande (voir <see cref="PlaybackService"/>). Le reste du service
-/// (fondu enchaîné, pré-chargement…) utilise le lecteur enveloppé directement.
+/// <see cref="LinkedPlayer"/> ou envoyées par la synchro elle-même, restent locales. Qui commande se lit au moment de
+/// l'appel (<see cref="MediaSession.ControllerForCurrentRequest"/>) : Media3 met les commandes en file et en exécute
+/// certaines sans contrôleur du tout (balayer l'appli des récents met en pause), un marqueur posé à l'avance pouvait
+/// donc servir à la mauvaise commande. Le reste du service (fondu enchaîné, pré-chargement…) utilise le lecteur
+/// enveloppé directement.
 /// </para>
 /// </summary>
 public sealed class JamRoutingPlayer(Media3IPlayer player, Func<IPlayerRoute?> route) : ForwardingPlayer(player)
@@ -19,19 +22,17 @@ public sealed class JamRoutingPlayer(Media3IPlayer player, Func<IPlayerRoute?> r
     /// <summary>Clé des connection hints que pose le contrôleur de l'interface.</summary>
     public const string AppControllerHint = "sonnuage.app";
 
-    /// <summary>La commande en cours vient-elle d'un contrôleur extérieur à l'interface ?</summary>
-    public bool FromOutside { get; set; }
+    /// <summary>La session qui expose ce lecteur, posée juste après sa création (elle a besoin du lecteur pour naître).</summary>
+    public MediaSession? Session { get; set; }
 
-    /// <summary>La route du Jam si la commande en cours doit y aller. Une commande ne passe qu'une fois.</summary>
-    private IPlayerRoute? Target
-    {
-        get
-        {
-            if (!FromOutside || route() is not { Routes: true } r) return null;
-            FromOutside = false;
-            return r;
-        }
-    }
+    /// <summary>Qui appelle, d'après le contrôleur de la commande en cours (à lire sur le thread du lecteur).</summary>
+    private HostControl.Caller Caller =>
+        Session?.ControllerForCurrentRequest is not { } controller ? HostControl.Caller.Service
+        : controller.ConnectionHints?.GetBoolean(AppControllerHint) == true ? HostControl.Caller.App
+        : HostControl.Caller.Outside;
+
+    /// <summary>La route du Jam si la commande en cours doit y aller, null pour le lecteur local.</summary>
+    private IPlayerRoute? Target => route() is { } r && HostControl.ToHost(Caller, r.Routes) ? r : null;
 
     // Lecture/pause disent ce qu'elles veulent : l'état du lecteur local (muet en « hôte seulement », en retard sur
     // l'hôte en mode invité) ne doit pas décider s'il faut basculer.

@@ -107,9 +107,10 @@ public sealed class PlaybackService : MediaLibraryService
         // pilotent l'hôte. Le reste du service garde le lecteur direct.
         var linked = services.GetRequiredService<SonNuage.UI.Services.IPlayer>() as LinkedPlayer;
         var routing = new JamRoutingPlayer(player, () => linked?.Route);
-        _session = new MediaLibrarySession.Builder(this, routing, new LibraryCallback(browser, queue, routing))
+        _session = new MediaLibrarySession.Builder(this, routing, new LibraryCallback(browser, queue))
             .SetSessionActivity(activity!)!
             .Build();
+        routing.Session = _session;
         // Après la session : à chaque changement de piste, elle publie le nouveau titre (notification, Android Auto)
         // avant nos traitements.
         player.AddListener(new PlayerEvents(player, _prefetcher, crossfader, queue, () => _queueKey, api, settings, browser, _glyph));
@@ -323,18 +324,8 @@ public sealed class PlaybackService : MediaLibraryService
     }
 
     /// <summary>Arborescence Android Auto, recherche, résolution des éléments demandés et reprise de lecture.</summary>
-    private sealed class LibraryCallback(LibraryBrowser browser, QueueStore queue, JamRoutingPlayer routing) : Java.Lang.Object, MediaLibrarySession.ICallback
+    private sealed class LibraryCallback(LibraryBrowser browser, QueueStore queue) : Java.Lang.Object, MediaLibrarySession.ICallback
     {
-        /// <summary>
-        /// Appelé juste avant chaque commande, sur le thread du lecteur, qui l'exécute aussitôt après : le lecteur
-        /// sait ainsi si elle vient de l'interface ou d'ailleurs (notification, casque, Android Auto).
-        /// </summary>
-        public int OnPlayerCommandRequest(MediaSession? session, MediaSession.ControllerInfo? controller, int playerCommand)
-        {
-            routing.FromOutside = controller?.ConnectionHints?.GetBoolean(JamRoutingPlayer.AppControllerHint) != true;
-            return SessionResult.ResultSuccess;
-        }
-
         private const int ErrorNotSupported = -6;
         private readonly object _searchLock = new();
         // Dernière recherche seulement : Media3 demande ses pages juste après l'avoir annoncée. Un dictionnaire gardait
