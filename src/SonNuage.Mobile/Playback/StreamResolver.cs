@@ -63,7 +63,9 @@ public sealed class StreamResolver(ApiClient api, PlaybackSettings settings, Acc
         YoutubeAudio? audio;
         try
         {
-            audio = youtube.AudioAsync(video).GetAwaiter().GetResult();
+            // Sur le thread de chargement d'ExoPlayer : une réponse qui n'arrive pas ne doit pas le bloquer indéfiniment.
+            using var timeout = new CancellationTokenSource(ResolveTimeout);
+            audio = youtube.AudioAsync(video, timeout.Token).GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {
@@ -86,6 +88,8 @@ public sealed class StreamResolver(ApiClient api, PlaybackSettings settings, Acc
         }
         return builder.Build()!;
     }
+
+    private static readonly TimeSpan ResolveTimeout = TimeSpan.FromSeconds(15);
 
     public string Key(Guid id, StreamQuality quality) => $"{accounts.Active?.Id:N}/{id:N}-{quality.ToWire()}";
 
