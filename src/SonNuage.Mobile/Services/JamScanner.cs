@@ -48,11 +48,12 @@ internal sealed class QrScanPage : ContentPage
             Options = new BarcodeReaderOptions { Formats = BarcodeFormat.QrCode, AutoRotate = true, Multiple = false },
             IsDetecting = true,
         };
+        // Appelé sur le thread d'analyse de la caméra : elle ne se touche que sur le thread principal.
         _camera.BarcodesDetected += (_, e) =>
         {
             if (e.Results.FirstOrDefault()?.Value is not { Length: > 0 } value) return;
-            _camera.IsDetecting = false;
-            _result.TrySetResult(value);
+            if (!_result.TrySetResult(value)) return;
+            MainThread.BeginInvokeOnMainThread(() => _camera.IsDetecting = false);
         };
 
         var hint = new Label
