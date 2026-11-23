@@ -4,7 +4,7 @@ using SonNuage.UI.Services;
 namespace SonNuage.Mobile.Playback;
 
 /// <summary>
-/// Le lecteur tel que la session Media3 le voit. Dans un Jam (mode invité), une commande venue d'ailleurs que
+/// Le lecteur tel que la session Media3 le voit. Dans un Jam (les deux modes), une commande venue d'ailleurs que
 /// l'interface (notification, écran verrouillé, casque, Android Auto) va à l'hôte, comme les boutons de l'interface
 /// (voir <see cref="LinkedPlayer"/>) : sur le lecteur local, la synchro l'annulerait aussitôt.
 /// <para>
@@ -33,15 +33,17 @@ public sealed class JamRoutingPlayer(Media3IPlayer player, Func<IPlayerRoute?> r
         }
     }
 
+    // Lecture/pause disent ce qu'elles veulent : l'état du lecteur local (muet en « hôte seulement », en retard sur
+    // l'hôte en mode invité) ne doit pas décider s'il faut basculer.
     public override void Play()
     {
-        if (Target is { } r) { if (!IsPlaying) _ = r.TogglePlayAsync(); }
+        if (Target is { } r) _ = r.SetPlayingAsync(true);
         else base.Play();
     }
 
     public override void Pause()
     {
-        if (Target is { } r) { if (IsPlaying) _ = r.TogglePlayAsync(); }
+        if (Target is { } r) _ = r.SetPlayingAsync(false);
         else base.Pause();
     }
 
@@ -50,14 +52,14 @@ public sealed class JamRoutingPlayer(Media3IPlayer player, Func<IPlayerRoute?> r
         get => base.PlayWhenReady;
         set
         {
-            if (Target is { } r) { if (value != base.PlayWhenReady) _ = r.TogglePlayAsync(); }
+            if (Target is { } r) _ = r.SetPlayingAsync(value);
             else base.PlayWhenReady = value;
         }
     }
 
     public override void Stop()
     {
-        if (Target is { } r) { if (IsPlaying) _ = r.TogglePlayAsync(); }
+        if (Target is { } r) _ = r.SetPlayingAsync(false);
         else base.Stop();
     }
 
