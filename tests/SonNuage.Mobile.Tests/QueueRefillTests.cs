@@ -31,4 +31,30 @@ public class QueueRefillTests
     [InlineData(true, 8, 8)]
     public void A_station_keeps_at_least_five_tracks_ahead_like_the_web_player(bool fromStation, int infiniteAhead, int ahead) =>
         Assert.Equal(ahead, QueueRefill.Ahead(fromStation, infiniteAhead));
+
+    private static readonly Guid A = Guid.NewGuid(), B = Guid.NewGuid(), C = Guid.NewGuid();
+
+    [Fact]
+    public void Youtube_tracks_never_reach_the_server_and_the_current_one_keeps_its_place()
+    {
+        var (ids, current) = QueueRefill.ServerTracks([A, null, B, C], currentIndex: 2);
+        Assert.Equal([A, B, C], ids);
+        Assert.Equal(1, current);
+    }
+
+    [Fact]
+    public void A_youtube_track_playing_seeds_from_the_last_server_track_before_it()
+    {
+        var (ids, current) = QueueRefill.ServerTracks([A, null, B], currentIndex: 1);
+        Assert.Equal([A, B], ids);
+        Assert.Equal(0, current);
+    }
+
+    [Fact]
+    public void A_queue_of_youtube_tracks_only_has_nothing_to_seed()
+    {
+        var (ids, current) = QueueRefill.ServerTracks([null, null], currentIndex: 1);
+        Assert.Empty(ids);
+        Assert.Equal(-1, current);
+    }
 }

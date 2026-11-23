@@ -26,4 +26,22 @@ public static class QueueRefill
 
     /// <summary>Morceaux à garder après celui qui joue.</summary>
     public static int Ahead(bool fromStation, int infiniteAhead) => fromStation ? Math.Max(infiniteAhead, StationAhead) : infiniteAhead;
+
+    /// <summary>
+    /// Les morceaux du serveur dans la file, seuls à pouvoir lui servir de graines ou d'exclusions (null : titre YouTube
+    /// direct d'un Jam, dont l'identifiant n'existe pas côté serveur), et la place parmi eux du dernier joué jusqu'à
+    /// celui en cours compris (-1 : aucun).
+    /// </summary>
+    public static (List<Guid> Ids, int CurrentIndex) ServerTracks(IReadOnlyList<Guid?> queue, int currentIndex)
+    {
+        var ids = new List<Guid>(queue.Count);
+        var current = -1;
+        for (var i = 0; i < queue.Count; i++)
+        {
+            if (queue[i] is not { } id) continue;
+            ids.Add(id);
+            if (i <= currentIndex) current = ids.Count - 1;
+        }
+        return (ids, current);
+    }
 }

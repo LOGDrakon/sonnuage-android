@@ -222,18 +222,23 @@ public sealed class PlaybackService : MediaLibraryService
         private void Extend()
         {
             if (_extending || queueKey() is not { } key) return;
+            // Dans un Jam, la file est celle de l'hôte : rien à ajouter après son titre.
+            if (jam() is { Routes: true }) return;
             var station = player.QueueStation();
             var infinitePlay = settings.InfinitePlay;
             if (!QueueRefill.Applies(station is not null, infinitePlay, player.RepeatMode == PlayerConst.RepeatOff)) return;
             var count = player.MediaItemCount;
             var needed = InfinitePlay.Needed(count, player.CurrentMediaItemIndex, QueueRefill.Ahead(station is not null, settings.InfiniteAhead));
             if (needed == 0) return;
-            var ids = new List<Guid>(count);
+            var queued = new List<Guid?>(count);
             for (var i = 0; i < count; i++)
             {
-                if (TrackItems.ToTrack(player.GetMediaItemAt(i)) is { } t) ids.Add(t.Id);
+                queued.Add(TrackItems.ToTrack(player.GetMediaItemAt(i)) is { } t && !YoutubeTracks.IsYoutube(t) ? t.Id : null);
             }
-            var request = new RadioRequest(InfinitePlay.Seeds(ids, player.CurrentMediaItemIndex), ids.TakeLast(RadioRequest.MaxIds).ToList(), needed);
+            var (ids, current) = QueueRefill.ServerTracks(queued, player.CurrentMediaItemIndex);
+            // Aucun morceau du serveur joué : la lecture infinie n'a rien sur quoi s'appuyer.
+            if (current < 0 && station is null) return;
+            var request = new RadioRequest(InfinitePlay.Seeds(ids, current), ids.TakeLast(RadioRequest.MaxIds).ToList(), needed);
             _extending = true;
             _ = Task.Run(async () =>
             {
