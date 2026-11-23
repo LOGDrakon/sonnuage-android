@@ -22,4 +22,11 @@ public static class HostControl
 
     /// <summary>La commande part-elle chez l'hôte du Jam plutôt qu'au lecteur local ?</summary>
     public static bool ToHost(Caller caller, bool routes) => routes && caller == Caller.Outside;
+
+    /// <summary>Saut arrière ou avant chez l'hôte : depuis sa position, borné au titre (durée inconnue : pas de borne haute).</summary>
+    public static double SeekTarget(double hostSeconds, double deltaSeconds, double durationSeconds)
+    {
+        var target = Math.Max(0, hostSeconds + deltaSeconds);
+        return durationSeconds > 0 ? Math.Min(target, durationSeconds) : target;
+    }
 }

@@ -176,6 +176,27 @@ public sealed class JamRoutingPlayer(Media3IPlayer player, Func<IPlayerRoute?> r
         else base.SeekTo(positionMs);
     }
 
+    public override void SeekBack()
+    {
+        if (Target is { } r) SeekHost(r, -SeekBackIncrement / 1000.0);
+        else base.SeekBack();
+    }
+
+    public override void SeekForward()
+    {
+        if (Target is { } r) SeekHost(r, SeekForwardIncrement / 1000.0);
+        else base.SeekForward();
+    }
+
+    /// <summary>Depuis la position de l'hôte : celle qu'on affiche en « hôte seulement », la locale (calée) en mode invité.</summary>
+    private void SeekHost(IPlayerRoute route, double deltaSeconds)
+    {
+        var (position, duration) = route.Shown is { } shown
+            ? (shown.PositionSeconds, shown.DurationSeconds)
+            : (base.CurrentPosition / 1000.0, base.Duration > 0 ? base.Duration / 1000.0 : 0);
+        _ = route.SeekAsync(HostControl.SeekTarget(position, deltaSeconds, duration));
+    }
+
     public override void SeekToNext()
     {
         if (Target is { } r) _ = r.NextAsync();
