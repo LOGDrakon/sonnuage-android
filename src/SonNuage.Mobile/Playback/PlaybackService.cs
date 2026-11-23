@@ -117,7 +117,7 @@ public sealed class PlaybackService : MediaLibraryService
         if (linked is not null) linked.StateChanged += routing.Refresh;
         // Après la session : à chaque changement de piste, elle publie le nouveau titre (notification, Android Auto)
         // avant nos traitements.
-        player.AddListener(new PlayerEvents(player, _prefetcher, crossfader, queue, () => _queueKey, api, settings, browser, _glyph));
+        player.AddListener(new PlayerEvents(player, _prefetcher, crossfader, queue, () => _queueKey, api, settings, browser, _glyph, () => linked?.Route));
         accounts.ActiveChanged += OnAccountChanged;
         // Les autres appareils du compte voient ce que joue le téléphone et le pilotent, même sans interface ouverte.
         if (linked is not null)
@@ -189,7 +189,7 @@ public sealed class PlaybackService : MediaLibraryService
     }
 
     /// <summary>Événements du lecteur : pré-chargement, historique d'écoute, sauvegarde de la file.</summary>
-    private sealed class PlayerEvents(Media3IPlayer player, Prefetcher prefetcher, Crossfader crossfader, QueueStore queue, Func<string?> queueKey, ApiClient api, PlaybackSettings settings, LibraryBrowser browser, Glyph.GlyphCloud? glyph) : Java.Lang.Object, IPlayerListener
+    private sealed class PlayerEvents(Media3IPlayer player, Prefetcher prefetcher, Crossfader crossfader, QueueStore queue, Func<string?> queueKey, ApiClient api, PlaybackSettings settings, LibraryBrowser browser, Glyph.GlyphCloud? glyph, Func<IPlayerRoute?> jam) : Java.Lang.Object, IPlayerListener
     {
         // Un seul appel de lecture infinie à la fois : deux changements de piste rapprochés ne doivent pas doubler l'ajout.
         private bool _extending;
@@ -283,6 +283,16 @@ public sealed class PlaybackService : MediaLibraryService
         }
 
         public void OnRepeatModeChanged(int repeatMode) => prefetcher.Schedule(player);
+
+        /// <summary>
+        /// Jam en mode invité : le système a coupé le son ici (casque débranché, focus audio perdu). Sans retenue, la
+        /// synchro relancerait la lecture au tour suivant, sur le haut-parleur. L'hôte, lui, continue.
+        /// </summary>
+        public void OnPlayWhenReadyChanged(bool playWhenReady, int reason)
+        {
+            if (playWhenReady || reason is not (PlayerConst.PlayWhenReadyAudioBecomingNoisy or PlayerConst.PlayWhenReadyAudioFocusLoss)) return;
+            if (jam() is { Routes: true } route) route.HoldLocalAudio();
+        }
 
         public void OnIsPlayingChanged(bool isPlaying)
         {

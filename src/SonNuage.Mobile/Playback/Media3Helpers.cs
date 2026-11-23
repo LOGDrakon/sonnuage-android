@@ -100,6 +100,12 @@ public static class PlayerConst
     public const int RepeatOne = 1;
     public const int RepeatAll = 2;
     public const int DiscontinuityAutoTransition = 0;
+    public const int PlayWhenReadyAudioFocusLoss = 2;
+    public const int PlayWhenReadyAudioBecomingNoisy = 3;
+    public const int PlayWhenReadyRemote = 4;
+    public const int EventPlaybackStateChanged = 4;
+    public const int EventPlayWhenReadyChanged = 5;
+    public const int EventIsPlayingChanged = 7;
 }
 
 public static class FutureExtensions

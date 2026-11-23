@@ -102,13 +102,13 @@ public sealed class JamRoutingPlayer(Media3IPlayer player, Func<IPlayerRoute?> r
         var flags = new FlagSet.Builder();
         foreach (var listener in _listeners.ToList())
         {
-            if (face.PlayWhenReady != seen.PlayWhenReady) listener.OnPlayWhenReadyChanged(face.PlayWhenReady, InterfaceConsts.PlayWhenReadyChangeReasonRemote);
+            if (face.PlayWhenReady != seen.PlayWhenReady) listener.OnPlayWhenReadyChanged(face.PlayWhenReady, PlayerConst.PlayWhenReadyRemote);
             if (face.State != seen.State) listener.OnPlaybackStateChanged(face.State);
             if (face.IsPlaying != seen.IsPlaying) listener.OnIsPlayingChanged(face.IsPlaying);
         }
-        if (face.PlayWhenReady != seen.PlayWhenReady) flags.Add(InterfaceConsts.EventPlayWhenReadyChanged);
-        if (face.State != seen.State) flags.Add(InterfaceConsts.EventPlaybackStateChanged);
-        if (face.IsPlaying != seen.IsPlaying) flags.Add(InterfaceConsts.EventIsPlayingChanged);
+        if (face.PlayWhenReady != seen.PlayWhenReady) flags.Add(PlayerConst.EventPlayWhenReadyChanged);
+        if (face.State != seen.State) flags.Add(PlayerConst.EventPlaybackStateChanged);
+        if (face.IsPlaying != seen.IsPlaying) flags.Add(PlayerConst.EventIsPlayingChanged);
         var events = new PlayerEvents(flags.Build());
         foreach (var listener in _listeners.ToList()) listener.OnEvents(this, events);
     }
