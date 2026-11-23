@@ -23,7 +23,8 @@ public sealed class JamScanner : IJamScanner
             var page = new QrScanPage();
             await root.Navigation.PushModalAsync(page, animated: true);
             string? text;
-            using (ct.Register(() => page.Cancel()))
+            // L'annulation peut venir de n'importe quel thread ; la caméra ne se touche que sur le thread principal.
+            using (ct.Register(() => MainThread.BeginInvokeOnMainThread(page.Cancel)))
                 text = await page.Result;
             if (root.Navigation.ModalStack.Contains(page)) await root.Navigation.PopModalAsync(animated: true);
             return text;

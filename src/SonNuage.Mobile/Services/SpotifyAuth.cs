@@ -26,6 +26,8 @@ public sealed class SpotifyAuth : IMusicServiceAuth
 
         var verifier = Base64Url(RandomNumberGenerator.GetBytes(48));
         var challenge = Base64Url(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
+        // Lie la redirection à cette demande : une autre appli du téléphone ne peut pas y glisser son propre code.
+        var state = Base64Url(RandomNumberGenerator.GetBytes(16));
 
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -37,6 +39,7 @@ public sealed class SpotifyAuth : IMusicServiceAuth
             $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
             "&code_challenge_method=S256" +
             $"&code_challenge={challenge}" +
+            $"&state={state}" +
             $"&scope={Uri.EscapeDataString(Scopes)}";
 
         // Fenêtre d'attente : l'utilisateur se connecte dans l'onglet, puis revient. Au-delà, on abandonne.
@@ -45,47 +48,51 @@ public sealed class SpotifyAuth : IMusicServiceAuth
 
         await MainThread.InvokeOnMainThreadAsync(() => Browser.Default.OpenAsync(new Uri(authorizeUrl), BrowserLaunchMode.SystemPreferred));
 
-        var code = await WaitForCodeAsync(listener, timeout.Token);
+        var code = await WaitForCodeAsync(listener, state, timeout.Token);
         listener.Stop();
         if (code is null) return null;
 
         return await ExchangeAsync(code, verifier, redirectUri, ct);
     }
 
-    /// <summary>Attend la redirection de l'onglet sur la boucle locale et en extrait le paramètre <c>code</c>.</summary>
-    private static async Task<string?> WaitForCodeAsync(TcpListener listener, CancellationToken ct)
+    /// <summary>
+    /// Attend la redirection de l'onglet sur la boucle locale et en extrait le paramètre <c>code</c>. Une connexion qui
+    /// n'est pas cette redirection (pré-connexion du navigateur, favicon, autre appli) est ignorée : on attend la suivante.
+    /// </summary>
+    private static async Task<string?> WaitForCodeAsync(TcpListener listener, string state, CancellationToken ct)
     {
         try
         {
-            using var client = await listener.AcceptTcpClientAsync(ct);
-            using var stream = client.GetStream();
-            var buffer = new byte[8192];
-            var read = await stream.ReadAsync(buffer, ct);
-            var request = Encoding.ASCII.GetString(buffer, 0, read);
-            // Première ligne : « GET /login?code=…&… HTTP/1.1 ».
-            var firstLine = request.Split('\n', 2)[0];
-            var target = firstLine.Split(' ') is { Length: >= 2 } parts ? parts[1] : "";
-            string? code = null;
-            var q = target.IndexOf('?');
-            if (q >= 0)
-                foreach (var pair in target[(q + 1)..].Split('&'))
+            while (true)
+            {
+                using var client = await listener.AcceptTcpClientAsync(ct);
+                using var stream = client.GetStream();
+                var buffer = new byte[8192];
+                var read = await stream.ReadAsync(buffer, ct);
+                if (LoopbackRedirect.Query(Encoding.ASCII.GetString(buffer, 0, read)) is not { } query) continue;
+                if (query.GetValueOrDefault("state") != state)
                 {
-                    var kv = pair.Split('=', 2);
-                    if (kv.Length == 2 && kv[0] == "code") code = Uri.UnescapeDataString(kv[1]);
+                    await RespondAsync(stream, "<h2>Lien inattendu</h2><p>Relancez la connexion depuis SonNuage.</p>", ct);
+                    continue;
                 }
-
-            var body = code is null
-                ? "<h2>Connexion annulée</h2><p>Vous pouvez revenir à SonNuage.</p>"
-                : "<h2>Spotify connecté ✓</h2><p>Revenez à SonNuage, c'est prêt.</p>";
-            var html = $"<!doctype html><meta charset=utf-8><title>SonNuage</title><body style=\"font-family:sans-serif;text-align:center;padding:3rem\">{body}</body>";
-            var response = $"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {Encoding.UTF8.GetByteCount(html)}\r\nConnection: close\r\n\r\n{html}";
-            await stream.WriteAsync(Encoding.UTF8.GetBytes(response), ct);
-            return code;
+                var code = query.GetValueOrDefault("code");
+                await RespondAsync(stream, code is null
+                    ? "<h2>Connexion annulée</h2><p>Vous pouvez revenir à SonNuage.</p>"
+                    : "<h2>Spotify connecté ✓</h2><p>Revenez à SonNuage, c'est prêt.</p>", ct);
+                return code;
+            }
         }
         catch (OperationCanceledException)
         {
             return null;
         }
+    }
+
+    private static async Task RespondAsync(NetworkStream stream, string body, CancellationToken ct)
+    {
+        var html = $"<!doctype html><meta charset=utf-8><title>SonNuage</title><body style=\"font-family:sans-serif;text-align:center;padding:3rem\">{body}</body>";
+        var response = $"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {Encoding.UTF8.GetByteCount(html)}\r\nConnection: close\r\n\r\n{html}";
+        await stream.WriteAsync(Encoding.UTF8.GetBytes(response), ct);
     }
 
     /// <summary>Échange le code contre des jetons (PKCE), et lit le nom affiché du compte.</summary>
@@ -100,7 +107,17 @@ public sealed class SpotifyAuth : IMusicServiceAuth
             ["client_id"] = SpotifyClientId,
             ["code_verifier"] = verifier,
         });
-        using var res = await http.PostAsync("https://accounts.spotify.com/api/token", body, ct);
+        HttpResponseMessage res;
+        try
+        {
+            res = await http.PostAsync("https://accounts.spotify.com/api/token", body, ct);
+        }
+        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            // Délai dépassé : une erreur réseau comme une autre, que l'interface affiche.
+            throw new HttpRequestException("Spotify ne répond pas.", ex);
+        }
+        using var _ = res;
         if (!res.IsSuccessStatusCode) return null;
         using var doc = JsonDocument.Parse(await res.Content.ReadAsByteArrayAsync(ct));
         var root = doc.RootElement;
