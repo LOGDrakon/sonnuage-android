@@ -55,14 +55,15 @@ public sealed class JamRoutingPlayer(Media3IPlayer player, Func<IPlayerRoute?> r
 
     public override bool IsPlaying => Host is { } host ? host.IsPlaying : base.IsPlaying;
 
-    // Prêt dès que l'hôte a un titre : sinon une lecture demandée sur un lecteur local vide relancerait la reprise de
-    // la file sauvegardée, ici.
+    // Prêt dès que l'hôte a un titre : Media3 choisit alors entre lecture et pause d'après l'hôte, sans préparer le
+    // lecteur local.
     public override int PlaybackState => Host is { Current: not null } ? PlayerConst.StateReady : base.PlaybackState;
 
     /// <summary>Le lecteur local tel qu'il est, quoi que montre la session.</summary>
     public (bool PlayWhenReady, bool IsPlaying, int State) Local => (base.PlayWhenReady, base.IsPlaying, base.PlaybackState);
 
-    private (bool PlayWhenReady, bool IsPlaying, int State) Face => (PlayWhenReady, IsPlaying, PlaybackState);
+    private (bool PlayWhenReady, bool IsPlaying, int State) Face =>
+        Host is { } host ? (host.IsPlaying, host.IsPlaying, host.Current is not null ? PlayerConst.StateReady : base.PlaybackState) : Local;
 
     // ForwardingPlayer ne relaie que les événements du lecteur enveloppé : quand l'hôte change, c'est à nous de prévenir
     // les écouteurs de la session (notification, contrôleurs), avec ce qu'ils ont vu en dernier pour seule référence.
@@ -75,6 +76,7 @@ public sealed class JamRoutingPlayer(Media3IPlayer player, Func<IPlayerRoute?> r
     {
         base.AddListener(listener);
         if (listener is null) return;
+        if (_listeners.Contains(listener)) return;
         if (_listeners.Count == 0) _seen = Face;
         _listeners.Add(listener);
         if (_inner is null)
@@ -91,10 +93,17 @@ public sealed class JamRoutingPlayer(Media3IPlayer player, Func<IPlayerRoute?> r
     }
 
     /// <summary>L'état du Jam a pu changer (n'importe quel thread) : la session le reverra sur le thread du lecteur.</summary>
-    public void Refresh() => _handler.Post(Publish);
+    public void Refresh()
+    {
+        // Un seul passage en attente : StateChanged arrive plusieurs fois par seconde pendant la lecture.
+        if (Interlocked.Exchange(ref _pending, 1) == 0) _handler.Post(Publish);
+    }
+
+    private int _pending;
 
     private void Publish()
     {
+        Volatile.Write(ref _pending, 0);
         var face = Face;
         if (face == _seen || _listeners.Count == 0) return;
         var seen = _seen;
@@ -172,7 +181,12 @@ public sealed class JamRoutingPlayer(Media3IPlayer player, Func<IPlayerRoute?> r
 
     public override void SeekTo(long positionMs)
     {
-        if (Target is { } r) _ = r.SeekAsync(positionMs / 1000.0);
+        if (Target is { } r)
+        {
+            // En « hôte seulement », la barre de la notification est celle du titre local en pause : sa position ne
+            // dit rien du titre de l'hôte. Reculer/avancer (casque, Android Auto) partent, eux, de la position de l'hôte.
+            if (Host is null) _ = r.SeekAsync(positionMs / 1000.0);
+        }
         else base.SeekTo(positionMs);
     }
 
