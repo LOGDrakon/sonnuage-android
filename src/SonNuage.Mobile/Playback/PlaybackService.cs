@@ -109,7 +109,7 @@ public sealed class PlaybackService : MediaLibraryService
         // pilotent l'hôte. Le reste du service garde le lecteur direct.
         var linked = _linked = services.GetRequiredService<SonNuage.UI.Services.IPlayer>() as LinkedPlayer;
         var routing = _routing = JamRoutingPlayer.Current = new JamRoutingPlayer(player, () => linked?.Route);
-        _session = new MediaLibrarySession.Builder(this, routing, new LibraryCallback(browser, queue))
+        _session = new MediaLibrarySession.Builder(this, routing, new LibraryCallback(browser, queue, () => linked?.Route))
             .SetSessionActivity(activity!)!
             .Build();
         routing.Session = _session;
@@ -345,7 +345,7 @@ public sealed class PlaybackService : MediaLibraryService
     }
 
     /// <summary>Arborescence Android Auto, recherche, résolution des éléments demandés et reprise de lecture.</summary>
-    private sealed class LibraryCallback(LibraryBrowser browser, QueueStore queue) : Java.Lang.Object, MediaLibrarySession.ICallback
+    private sealed class LibraryCallback(LibraryBrowser browser, QueueStore queue, Func<SonNuage.UI.Services.IPlayerRoute?> route) : Java.Lang.Object, MediaLibrarySession.ICallback
     {
         private const int ErrorNotSupported = -6;
         private readonly object _searchLock = new();
@@ -410,6 +410,13 @@ public sealed class PlaybackService : MediaLibraryService
         public IListenableFuture? OnPlaybackResumption(MediaSession? mediaSession, MediaSession.ControllerInfo? controller) =>
             FutureExtensions.FromTask(async () =>
             {
+                // Dans un Jam, « lecture » sur un lecteur local vide (casque, notification) est pour l'hôte : Media3
+                // demande ici une file à reprendre et, faute de file, relancerait le lecteur local sans contrôleur.
+                if (route() is { Routes: true } r)
+                {
+                    await r.SetPlayingAsync(true);
+                    throw new InvalidOperationException("Jam : la lecture est envoyée à l'hôte.");
+                }
                 var saved = await queue.LoadAsync() ?? throw new InvalidOperationException("Aucune file à reprendre.");
                 return saved.StartPosition();
             });
